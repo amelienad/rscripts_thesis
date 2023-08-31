@@ -1,0 +1,166 @@
+# Random Forest Classification Script
+
+# import packages
+library(sp)
+library(raster)
+library(terra)
+library(tidyverse)
+library(glue)
+
+setwd()
+getwd()
+dir()
+
+# import image (S2), shapefile (training data) and forest mask  --------
+
+img <- brick("subset_3_of_S2B_MSIL2A_20230421T101559_N0509_R065_T33UUU_20230421T131333_resampled.tif") # not cut to size
+img_crop <- brick("img_crop_final.tif")                                                                # cut to size   
+crs(img)
+
+# Classification with three fuel type classes (herb, grass, shrub)
+shp_tr <- shapefile("training_data_field_c3_classes_.shp")
+shp_mask <- shapefile("Forstflaechen_BB_dissolved_3.shp")
+
+shp_tr
+shp_mask
+
+compareCRS(shp_mask, img_crop) # true
+compareCRS(shp_tr, img_crop) # true
+
+
+# Crop raster with mask ---------------------------------------------------
+
+r2 <- crop(img, extent(shp_mask))
+r3 <- mask(r2, shp_mask)
+plotRGB(r3, r = 3, g = 2, b = 1, stretch = "lin")
+writeRaster(r3, "img_crop_final.tif")
+
+
+
+# view training data on image ---------------------------------------------
+
+plotRGB(img_crop, r = 3, g = 2, b = 1, stretch = "lin")
+plot(shp_tr, col="red",  add = T)
+
+
+
+# Prepare for classification ----------------------------------------------
+
+levels(as.factor(shp_tr$class_c3))
+## "grass" "herb"  "shrub" 
+
+
+for (i in 1:length(unique(shp_tr$class_c3))) {cat(paste0(i, " ", levels(as.factor(shp_tr$class_c3))[i]), sep="\n")}
+
+#1 grass
+#2 herb
+#3 shrub
+
+names(img_crop)
+
+names(img_crop) <- c("b2", "b3", "b4", "b5", "b6", "b7","b8","b8A","b9","b11","b12") 
+
+smp <- extract(img_crop, shp_tr, df = T) 
+
+#.rs.unloadPackage("tidyr") # unload the offending package and try again
+
+smp
+
+smp$cl <- as.factor(shp_tr$class_c3[match(smp$ID, seq(nrow(shp_tr)))]) # new column
+smp <- smp[-1] # delete ID column
+
+summary(smp$cl)
+
+# number of available training samples per class
+
+str(smp)
+
+
+# View spectral profiles --------------------------------------------------
+
+sp <- aggregate( . ~ cl, data = smp, FUN = mean, na.rm = TRUE )
+
+plot.new()
+
+plot(0,
+     ylim = c(min(sp[2:ncol(sp)]), max(sp[2:ncol(sp)])),  
+     xlim = c(1, ncol(smp)-1),
+     type = 'n', 
+     xlab = "sentinel-2 bands", 
+     ylab = "reflectance [% * 100]"
+)
+
+mycolors <- c("#fdd0a2","#ccece6", "#d4b9da")
+
+for (i in 1:nrow(sp)){
+  lines(as.numeric(sp[i, -1]), 
+        lwd = 3, 
+        col = mycolors[i]
+  )
+}
+
+
+grid()
+
+legend(as.character(sp$cl),
+       x = "topleft",
+       col = mycolors,
+       lwd = 5,
+       bty = "n",
+       ncol = 3
+)
+
+
+# Random Forest Classification --------------------------------------------
+
+library(randomForest)
+
+## down-sampling
+smp.size <- rep(min(summary(smp$cl)), nlevels(smp$cl))
+smp.size
+
+rfmodel <- tuneRF(x = smp[-ncol(smp)],
+                  y = smp$cl,
+                  sampsize = smp.size,
+                  strata = smp$cl,
+                  ntree = 250,
+                  importance = TRUE,
+                  doBest = TRUE
+)
+
+rfmodel
+
+varImpPlot(rfmodel)
+
+plot(rfmodel, col = c("#fdd0a2","#ccece6", "#d4b9da"))
+legend(as.character(sp$cl),
+       x = "topright",
+       col = mycolors,
+       lwd = 5,
+       bty = "n",
+       ncol = 3
+)
+
+save(rfmodel, file = "rfmodel_field_c3.RData")
+
+result <- predict(img_crop,
+                  rfmodel,
+                  filename = "RF_classification_field_cluster_3.tif",
+                  overwrite = TRUE
+)
+
+
+
+# Validation --------------------------------------------------------------
+
+sign <- binom.test(x = 114,
+                   n = 158,
+                   alternative = c("two.sided"),
+                   conf.level = 0.95
+)
+
+pvalue <- sign$p.value
+pvalue
+
+CI95 <- sign$conf.int[1:2]
+CI95
