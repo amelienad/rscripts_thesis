@@ -1,0 +1,286 @@
+# Point Cloud Prosessing Script
+
+setwd()
+
+library(lidR)
+library(ggplot2)
+library(sp)
+library(raster)
+library(terra)
+citation("ForestGapR")
+
+# load and check data -----------------------------------------------------
+
+plot8 <- readLAS("/PC_plot8_5cm.las", select = "xyzi")
+las_check(plot8)
+crs(plot8)  <- "epsg:25832"
+
+plot(plot8, 
+     color = "Intensity", 
+     bg = "white", 
+     axis = TRUE, 
+     legend = TRUE
+)
+
+
+# ground classification ---------------------------------------------------
+
+mycsf <- csf(sloop_smooth = F, class_threshold = 0.3, cloth_resolution = 0.05, rigidness = 2)
+plot8_ground <- classify_ground(plot8, mycsf)
+
+
+# plot result
+plot_crossection <- function(plot8_ground,
+                             p1 = c(min(plot8_ground@data$X), mean(plot8_ground@data$Y)),
+                             p2 = c(max(plot8_ground@data$X), mean(plot8_ground@data$Y)),
+                             width = 4, colour_by = NULL)
+{
+  colour_by <- enquo(colour_by)
+  data_clip <- clip_transect(plot8_ground, p1, p2, width)
+  p <- ggplot(data_clip@data, aes(X,Z)) + geom_point(size = 0.5) + coord_equal() + theme_minimal()
+  
+  if (!is.null(colour_by))
+    p <- p + aes(color = !!colour_by) + labs(color = "")
+  
+  return(p)
+}
+
+plot_crossection(plot8_ground, colour_by = factor(Classification))
+
+plot(plot8_ground, color = "Classification", size = 2, bg = "white") 
+
+# plot only ground
+gnd8 <- filter_ground(plot8_ground)
+plot(gnd8, size = 3, bg = "white")
+
+# save classified point cloud
+writeLAS(plot8_ground, "/plot8_clss.las")
+
+
+# create DTM --------------------------------------------------------------
+
+plot8_dtm <- rasterize_terrain(plot8_ground, res = 0.1, algorithm = kriging(k = 40))
+plot(plot8_dtm, col = gray(1:50/50))
+
+
+# normalize point cloud ---------------------------------------------------
+
+plot8_nml <- normalize_height(plot8_ground, kriging())
+hist(filter_ground(plot8_nml)$Z, main = "", xlab = "Elevation")
+plot(plot8_nml, size = 2, axis = TRUE, legend = TRUE, bg = "white")
+
+# filter points < 0 m and > 32 m
+plot8_nmlf <- filter_poi(plot8_nml, Z >= 0, Z <= 32)
+plot(plot8_nmlf, size = 2, axis = TRUE, legend = TRUE, bg = "white")
+
+# plot8_nmlf <- readLAS("/plot8_nmlf.las") # LAStools
+
+
+# clip normalized point cloud to 30x30 m plot -----------------------------
+
+plot8_norm_circle <- clip_circle(plot8_nmlf, 790970, 5845788, 15)
+plot(plot8_norm_circle, size = 2, axis = TRUE, legend = TRUE, bg = "white")
+
+# save normalized point cloud
+writeLAS(plot8_norm_circle, "/plot8_norm_circle.las")
+
+
+# create CHM --------------------------------------------------------------
+
+fill.na <- function(x, i=5) { if (is.na(x)[i]) { return(mean(x, na.rm = TRUE)) } else { return(x[i]) }}
+w <- matrix(1, 3, 3)
+
+plot8_chm <- rasterize_canopy(plot8_norm_circle, res = 0.1, algorithm = p2r(subcircle = 0.05), pkg = "terra")
+filled <- terra::focal(plot8_chm, w, fun = fill.na)
+plot8_chms <- terra::focal(plot8_chm, w, fun = mean, na.rm = TRUE)
+
+chms <- c(plot8_chm, filled, plot8_chms)
+names(chms) <- c("Base", "Filled", "Smoothed")
+col <- height.colors(25)
+plot(chms, col = col)
+plot(plot8_chms, col = col)
+ 
+# save chm
+writeRaster(plot8_chms, "/plot8_chm_circle.tif")
+
+
+# ForestGapR for forest gap analysis from canopy height models ------------
+
+library(ForestGapR)
+library(raster)
+library(viridis)
+
+
+# load chm ----------------------------------------------------------------
+
+plot8_chm <- raster("/plot8_chm_circle.tif")
+plot8_chm
+
+plot(plot8_chm, col=viridis(10))
+
+
+# setting height thresholds -----------------------------------------------
+
+threshold<-20
+size<-c(1,1000) # m2
+
+
+# detecting forest gaps ---------------------------------------------------
+
+plot8_gaps <- getForestGaps(chm_layer=plot8_chm, threshold=threshold, size=size)
+
+# plotting gaps
+plot(plot8_gaps, col="red", add=TRUE, legend=FALSE)
+
+
+# computing basic statistis of forest gap ---------------------------------
+
+plot8_gstats<-GapStats(gap_layer=plot8_gaps, chm_layer=plot8_chm)
+
+# Export statistics
+write_xlsx(plot8_gstats,"/plot8_gapstats.xlsx")
+
+
+# gap-size Frequency Distributions ----------------------------------------
+
+GapSizeFDist(gaps_stats=plot8_gstats, method="Hanel_2017", col="forestgreen", pch=16, cex=1,
+             axes=FALSE,ylab="Gap Frequency",xlab=as.expression(bquote("Gap Size" ~ (m^2) )))
+axis(1);axis(2)
+grid(4,4)
+
+
+
+# calculate percentual fuel type cover ------------------------------------
+
+# filter points by Layer --------------------------------------------------
+
+plot8_grd <- filter_poi(plot8_nof, Classification == 2)
+plot8_hrb <- filter_poi(plot8_nof, Classification != 2, Classification != 7, Z <= 0.25)
+plot8_grs <- filter_poi(plot8_nof, Classification != 7, Z >= 0.25, Z <= 0.5)
+plot8_shr <- filter_poi(plot8_nof, Classification != 7, Z >= 0.5, Z <= 5)
+plot8_tre <- filter_poi(plot8_nof, Classification != 7, Z >= 5)
+
+writeLAS(plot8_hrb, "plot8_hrb_final.las")
+writeLAS(plot8_grs, "plot8_grs_final.las")
+writeLAS(plot8_shr, "plot8_shr_final.las")
+
+library(rgdal)
+library(rgeos)
+library(sf)
+library(terra)
+library(fasterize)
+
+
+# Step 1: Convert LAS dataset to raster dataset ---------------------------
+
+# Herb
+plot8_hrbL <- readLAS("plot8_hrb_final.las")
+raster8h <- grid_metrics(plot8_hrbL, ~mean(Z), 0.1)
+raster8h[is.na(raster8h)] <- 0      # Set no data values to 0
+raster8h[raster8h > 0] <- 2         # Replace filled cells (> 0m) with 2
+plot(raster8h)
+
+# Grass
+plot8_grsL <- readLAS("plot8_grs_final.las")
+raster8g <- grid_metrics(plot8_grsL, ~mean(Z), 0.1)
+raster8g[is.na(raster8g)] <- 0      # Set no data values to 0
+raster8g[raster8g >= 0.25] <- 2     # Replace filled cells (>= 0.25m) with 2
+plot(raster8g)
+
+# Shrub
+plot8_shrL <- readLAS("plot8_shr_final.las")
+raster8s <- grid_metrics(plot8_shrL, ~mean(Z), 0.1)
+raster8s[is.na(raster8s)] <- 0      # Set no data values to 0
+raster8s[raster8s >= 0.5] <- 2      # Replace filled cells (>= 0.5m) with 2
+plot(raster8s)
+
+
+
+# Step 2: Create Mask based on Point Cloud Center -------------------------
+
+# Set the center coordinates of the circle
+center_x <- (extent(plot8_nof)[1] + extent(plot8_nof)[2]) / 2
+center_y <- (extent(plot8_nof)[3] + extent(plot8_nof)[4]) / 2
+
+# Set the radius of the circle
+radius <- 15
+
+# Set the number of points to define the circle
+num_points <- 100
+
+# Generate the coordinates for the circle
+theta <- seq(0, 2 * pi, length.out = num_points)
+x <- center_x + radius * cos(theta)
+y <- center_y + radius * sin(theta)
+
+# Combine x and y coordinates into a matrix
+coords <- cbind(x, y)
+
+# Create the circular polygon
+circle_polygon <- Polygon(coords)
+
+# Create a spatial polygon object
+circle_sp <- SpatialPolygons(list(Polygons(list(circle_polygon), ID = "circle")))
+
+# Plot the circular polygon
+plot(circle_sp, col = "white", border = "red", lwd = 2) # gut
+
+
+# Rasterize the Polygon Mask and set outer Area to NA ---------------------
+
+# HERB
+SpP_rash <- rasterize(circle_sp, raster8h, getCover=TRUE) # The circle polygon is rasterized
+SpP_rash[SpP_rash==0] <- NA                               # Everything outside the circle is set to NA
+# GRASS
+SpP_rasg <- rasterize(circle_sp, raster8g, getCover=TRUE)
+SpP_rasg[SpP_rasg==0] <- NA 
+# SHRUB
+SpP_rass <- rasterize(circle_sp, raster8s, getCover=TRUE)
+SpP_rass[SpP_rass==0] <- NA 
+
+# Plot to check
+plot(mask(raster8s, SpP_rass)) # SpP_ras = Mask as Raster
+plot(circle_sp,  add=TRUE)
+
+
+# extract and save masked area from raster --------------------------------
+
+# HERB
+masked_h <- mask(raster8h, SpP_rash)
+plot(masked_h)
+# GRASS
+masked_g <- mask(raster8g, SpP_rasg)
+plot(masked_g)
+#SHRUB
+masked_s <- mask(raster8s, SpP_rass)
+plot(masked_s)
+
+# Save
+writeRaster(masked_h, "plot8_masked_h.tif")
+writeRaster(masked_g, "plot8_masked_g.tif")
+writeRaster(masked_s, "plot8_masked_s.tif")
+
+
+
+# Step 3: Calculate total cells, cells with value 0, and cells wit --------
+
+# HERB
+h0 <- length(masked_h[masked_h == 0])
+h2 <- length(masked_h[masked_h == 2])
+h_total <- h0+h2
+h0_perc <- (h0 / h_total) * 100
+h2_perc <- (h2 / h_total) * 100
+# GRASS
+g0 <- length(masked_g[masked_g == 0])
+g2 <- length(masked_g[masked_g == 2])
+g_total <- g0+g2
+g0_perc <- (g0 / g_total) * 100
+g2_perc <- (g2 / g_total) * 100
+# SHRUB
+s0 <- length(masked_s[masked_s == 0])
+s2 <- length(masked_s[masked_s == 2])
+s_total <- s0+s2
+s0_perc <- (s0 / s_total) * 100
+s2_perc <- (s2 / s_total) * 100
+
+# END
