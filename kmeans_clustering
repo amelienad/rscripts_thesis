@@ -1,0 +1,114 @@
+# K-means Cluster Analysis
+
+setwd()
+
+field.data <- read.table(file = 'felddaten.txt', sep = "", header = T)
+
+library(tidyverse)
+library(gridExtra)
+library(cluster)
+library(factoextra)
+
+
+# prepare data ------------------------------------------------------------
+
+field.data[is.na(field.data)] <- 0
+field.data.df <- field.data[, -1] 
+field.data.df <- as.data.frame(scale(field.data.df))
+
+
+# clustering --------------------------------------------------------------
+
+k2 <- kmeans(field.data.df, centers = 2, nstart = 25)
+k3 <- kmeans(field.data.df, centers = 3, nstart = 25)
+k4 <- kmeans(field.data.df, centers = 4, nstart = 25)
+k5 <- kmeans(field.data.df, centers = 5, nstart = 25)
+k6 <- kmeans(field.data.df, centers = 6, nstart = 25)
+
+
+# compare plots -----------------------------------------------------------
+
+p1 <- fviz_cluster(k2, 
+                   geom = c("point", "text"), 
+                   data = field.data.df,
+                   palette = "Set2") + 
+  ggtitle("cluster = 2") +
+  theme(text=element_text(family="Times", face="bold", size=20),
+        panel.grid = element_line(color = "#d9d9d9"),
+        panel.background = element_blank(),
+        axis.line = element_line(color = "black"),
+        axis.title = element_text(size = 15, color = "black"),
+        axis.text = element_text(size = 12, color = "black"),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10))
+  )
+p2 <- fviz_cluster(k3, 
+                   geom = c("point", "text"), 
+                   data = field.data.df,
+                   palette = "Set2") + 
+  ggtitle("cluster = 3") +
+  theme(text=element_text(family="Times", face="bold", size=20),
+        panel.grid = element_line(color = "#d9d9d9"),
+        panel.background = element_blank(),
+        axis.line = element_line(color = "black"),
+        axis.title = element_text(size = 15, color = "black"),
+        axis.text = element_text(size = 12, color = "black"),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10))
+  )
+p3 <- fviz_cluster(k4, 
+                   geom = c("point", "text"), 
+                   data = field.data.df,
+                   palette = "Set2") + 
+  ggtitle("cluster = 4") +
+  theme(text=element_text(family="Times", face="bold", size=20),
+        panel.grid = element_line(color = "#d9d9d9"),
+        panel.background = element_blank(),
+        axis.line = element_line(color = "black"),
+        axis.title = element_text(size = 15, color = "black"),
+        axis.text = element_text(size = 12, color = "black"),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10))
+  )
+p4 <- fviz_cluster(k5, 
+                   geom = c("point", "text"), 
+                   data = field.data.df,
+                   palette = "Set2") + 
+  ggtitle("cluster = 5") +
+  theme(text=element_text(family="Times", face="bold", size=20),
+        panel.grid = element_line(color = "#d9d9d9"),
+        panel.background = element_blank(),
+        axis.line = element_line(color = "black"),
+        axis.title = element_text(size = 15, color = "black"),
+        axis.text = element_text(size = 12, color = "black"),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10))
+  )
+p5 <- fviz_cluster(k6, 
+                   geom = c("point", "text"), 
+                   data = field.data.df,
+                   palette = "Set2") + 
+  ggtitle("cluster = 6") +
+  theme(text=element_text(family="Times", face="bold", size=20),
+        panel.grid = element_line(color = "#d9d9d9"),
+        panel.background = element_blank(),
+        axis.line = element_line(color = "black"),
+        axis.title = element_text(size = 15, color = "black"),
+        axis.text = element_text(size = 12, color = "black"),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10))
+  )
+
+
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+
+
+
+# optimal number of clusters ----------------------------------------------
+
+set.seed(123)
+gap_stat <- clusGap(field.data.df, FUN = kmeans, nstart = 25,
+                    K.max = 10, B = 50)
+# result
+print(gap_stat, method = "firstmax")
+fviz_gap_stat(gap_stat)
